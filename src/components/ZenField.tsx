@@ -14,7 +14,12 @@ export default function ZenField() {
     const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100)
     camera.position.z = 6
 
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+    let renderer: THREE.WebGLRenderer
+    try {
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+    } catch {
+      return
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
     renderer.setClearColor(0x000000, 0)
     mount.appendChild(renderer.domElement)
@@ -49,20 +54,23 @@ export default function ZenField() {
     points.rotation.x = -0.12
     scene.add(points)
 
-    const center = new THREE.Mesh(
-      new THREE.SphereGeometry(0.045, 20, 20),
-      new THREE.MeshBasicMaterial({ color: 0xb84d32 })
-    )
+    const centerGeometry = new THREE.SphereGeometry(0.045, 20, 20)
+    const centerMaterial = new THREE.MeshBasicMaterial({ color: 0xb84d32 })
+    const center = new THREE.Mesh(centerGeometry, centerMaterial)
     scene.add(center)
 
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
     let pointerX = 0
     let pointerY = 0
     let targetX = 0
     let targetY = 0
     let frame = 0
+    let sized = false
+    let disposed = false
 
     const onPointer = (event: PointerEvent) => {
       const rect = mount.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0 || motion.matches) return
       targetX = ((event.clientX - rect.left) / rect.width - 0.5) * 0.6
       targetY = -((event.clientY - rect.top) / rect.height - 0.5) * 0.6
     }
@@ -72,15 +80,12 @@ export default function ZenField() {
       targetY = 0
     }
 
-    const resize = () => {
-      const { width, height } = mount.getBoundingClientRect()
-      renderer.setSize(width, height, false)
-      camera.aspect = width / Math.max(height, 1)
-      camera.updateProjectionMatrix()
-    }
-
     const clock = new THREE.Clock()
     const animate = () => {
+      if (disposed || !sized || motion.matches) {
+        frame = 0
+        return
+      }
       const t = clock.getElapsedTime()
       pointerX += (targetX - pointerX) * 0.035
       pointerY += (targetY - pointerY) * 0.035
@@ -89,7 +94,7 @@ export default function ZenField() {
       points.rotation.x = -0.12 + pointerY * 0.22
 
       const array = geometry.attributes.position.array as Float32Array
-      for (let i = 0; i < count; i += 3) {
+      for (let i = 0; i < array.length; i += 3) {
         const phase = i * 0.013
         const breath = 1 + Math.sin(t * 0.72 + phase) * 0.006
         array[i] = original[i] * breath
@@ -101,19 +106,45 @@ export default function ZenField() {
       frame = requestAnimationFrame(animate)
     }
 
+    const syncMotion = () => {
+      cancelAnimationFrame(frame)
+      frame = 0
+      if (disposed || !sized) return
+      if (motion.matches) renderer.render(scene, camera)
+      else animate()
+    }
+
+    const resize = () => {
+      const { width, height } = mount.getBoundingClientRect()
+      sized = width > 0 && height > 0
+      if (sized) {
+        renderer.setSize(width, height, false)
+        camera.aspect = width / height
+        camera.updateProjectionMatrix()
+      }
+      syncMotion()
+    }
+
     resize()
-    animate()
+    const observer = new ResizeObserver(resize)
+    observer.observe(mount)
     mount.addEventListener('pointermove', onPointer)
     mount.addEventListener('pointerleave', onLeave)
     window.addEventListener('resize', resize)
+    motion.addEventListener('change', syncMotion)
 
     return () => {
+      disposed = true
       cancelAnimationFrame(frame)
+      observer.disconnect()
       mount.removeEventListener('pointermove', onPointer)
       mount.removeEventListener('pointerleave', onLeave)
       window.removeEventListener('resize', resize)
+      motion.removeEventListener('change', syncMotion)
       geometry.dispose()
       material.dispose()
+      centerGeometry.dispose()
+      centerMaterial.dispose()
       renderer.dispose()
       renderer.domElement.remove()
     }
